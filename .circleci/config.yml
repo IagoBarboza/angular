@@ -85,11 +85,19 @@ jobs:
       # This avoids waiting for the slowest build target to finish before running the first test
       # See https://github.com/bazelbuild/bazel/issues/4257
       # NOTE: Angular developers should typically just bazel build //packages/... or bazel test //packages/...
-      - run: bazel query --output=label //... | xargs bazel test
+      # FIXME: just testing
+      - run: bazel query --output=label //packages/core/... | xargs bazel test
+      #- run: bazel query --output=label //... | xargs bazel test
 
       # We run the integration tests outside of Bazel for now.
       # See comments inside this script.
-      - run: xvfb-run --auto-servernum ./integration/run_tests.sh
+      # FIXME: just testing
+      #- run: xvfb-run --auto-servernum ./integration/run_tests.sh
+
+      - persist_to_workspace:
+          root: dist/bin/packages
+          paths:
+            - '*/npm_package'
 
       # CircleCI will allow us to go back and view/download these artifacts from past builds.
       # Also we can use a service like https://buildsize.org/ to automatically track binary size of these artifacts.
@@ -112,6 +120,26 @@ jobs:
             - "node_modules"
             - "~/bazel_repository_cache"
 
+  # This job updates the content of repos like github.com/angular/core-builds
+  # for every green build on master.
+  publish_snapshot:
+    <<: *job_defaults
+    steps:
+      - checkout:
+          <<: *post_checkout
+      - attach_workspace:
+          at: bazel-packages
+      # CircleCI has a config setting to force SSH for all github connections
+      # This is not compatible with our mechanism of using a Personal Access Token
+      # Clear the global setting
+      - run: git config --global --unset "url.ssh://git@github.com.insteadof"
+
+      - run:
+          name: Decrypt Credentials
+          # See ./README.md
+          command: openssl aes-256-cbc -d -in .circleci/github_token -k "${KEY}" -out .git/credentials
+      - run: ./scripts/ci/publish-build-artifacts.sh
+
   aio_monitoring:
     <<: *job_defaults
     steps:
@@ -127,6 +155,16 @@ workflows:
     jobs:
       - lint
       - build
+      - publish_snapshot:
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - master
+                # Push commits to this branch to test this workflow
+                - test_publishing_secret_branch
+
   aio_monitoring:
     jobs:
       - aio_monitoring
